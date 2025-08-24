@@ -37,7 +37,7 @@ on:
       scripts:                         # Comma-separated YAML scripts
         description: "Comma-separated list of YAML scripts (default=all)"
         required: false
-        default: ""
+        default: "load_test.yml"
       parallel:                        # Sequential or parallel execution
         description: "Run tests in parallel?"
         required: true
@@ -45,6 +45,7 @@ on:
         options:
           - true
           - false
+        default: "false"
       vm_instances:                     # Number of parallel VMs if parallel=true
         description: "Number of VM instances for parallel execution"
         required: true
