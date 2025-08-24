@@ -52,7 +52,7 @@ on:
 
 # Environment variables (not in form, set defaults here)
 env:
-  ARTILLERY_VERSION: 2.1.1             # Pinned Artillery version for HTML report stability
+  ARTILLERY_VERSION: 2.0.21             # Pinned Artillery version for HTML report stability
   RETENTION_DAYS: 7                    # Default retention for artifacts
   INCLUDE_EXTRA: "Y"                   # Include extra files (Y/N) in artifact
 
