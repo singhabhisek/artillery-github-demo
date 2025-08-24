@@ -1,1 +1,40 @@
-# Sample load test YAML 
+config:
+  target: 'https://postman-echo.com'
+  phases:
+    -
+      name: 'Ramp Up'
+      duration: 20
+      arrivalRate: 1
+      rampTo: 10
+    -
+      name: 'Steady State'
+      duration: 30
+      arrivalRate: 10
+    -
+      name: 'Ramp Down'
+      duration: 60
+      arrivalRate: 10
+      rampTo: 1
+scenarios:
+  -
+    name: 'top_level_requests'
+    flow:
+      - get:
+          url: 'https://postman-echo.com/get?foo=bar'
+          headers:
+            MyHeader: 'stringValue'
+            X-Number-Header: '12345'
+            X-Boolean-Header: 'true'
+          expect:
+            - statusCode: 400
+      - post:
+          url: 'https://postman-echo.com/post'
+          headers:
+            Content-Type: 'application/json'
+            X-Custom-Header: 'customHeaderValue'
+            X-Number-Header: '67890'
+          json:
+            name: 'John'
+            age: 30
+          expect:
+            - statusCode: 200
