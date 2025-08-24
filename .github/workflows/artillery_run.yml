@@ -1,113 +1,112 @@
-name: Artillery Test Orchestration   # The name of the workflow as it appears in GitHub Actions tab
+name: Artillery Test Orchestration   # Workflow name as shown in Actions tab
 
 # Trigger workflow manually via GitHub UI
 on:
-  workflow_dispatch:                  # Enables a form to run the workflow manually
+  workflow_dispatch:
     inputs:
-      branch:                         # Input variable: Git branch to use for checkout
+      branch:                         # Git branch to checkout
         description: "Branch to use for the workflow"
-        required: true               # Must be provided
-        default: "main"             # Default branch if nothing is selected
-      action:                         # Input variable: action to perform
-        description: "Action to perform"
+        required: true
+        default: "main"
+      action:                         # Action to perform
+        description: "run-tests or clear-artifacts"
         required: true
         type: choice
         options:
-          - run-tests                # Option to run selected tests
-          - clear-artifacts          # Option to remove old artifacts
-      run_id:                         # Input variable: optional run identifier
-        description: "Optional run ID (leave blank to auto-generate timestamp)"
-        required: false              # Can be left blank
-        default: ""                  # Blank triggers auto-generation
-      environment:                    # Input variable: test environment
-        description: "Environment for tests (dev/test)"
+          - run-tests
+          - clear-artifacts
+      run_id:                         # Optional run identifier
+        description: "Optional run ID (leave blank for timestamp)"
+        required: false
+        default: ""
+      environment:                    # Test environment
+        description: "Environment for tests"
         required: true
         type: choice
         options:
           - dev
           - test
-      test_type:                       # Input variable: type of test folder to run
-        description: "Type of test folder to run (load/stress/smoke)"
+      test_type:                       # Folder under `tests/` (load/stress/smoke)
+        description: "Type of test folder to run"
         required: true
         type: choice
         options:
           - load
           - stress
-      scripts:                         # Input variable: comma-separated list of YAML scripts
-        description: "Comma-separated YAML scripts to run (default=all)"
-        required: false               # Optional; default runs all scripts in the folder
+          - smoke
+      scripts:                         # Comma-separated YAML scripts
+        description: "Comma-separated list of YAML scripts (default=all)"
+        required: false
         default: ""
-      parallel:                        # Input variable: flag to enable parallel execution
-        description: "Run tests in parallel using matrix? (true/false)"
+      parallel:                        # Sequential or parallel execution
+        description: "Run tests in parallel?"
         required: true
-        default: "false"              # Default is sequential execution
-      vm_instances:                     # Input variable: number of parallel VMs
-        description: "Number of parallel VMs (only used if parallel=true)"
+        type: choice
+        options:
+          - true
+          - false
+      vm_instances:                     # Number of parallel VMs if parallel=true
+        description: "Number of VM instances for parallel execution"
         required: true
         default: "1"
-      retention_days:                   # Input variable: artifact retention period
-        description: "Retention period for artifacts in days"
-        required: true
-        default: "7"
-      include_extra:                    # Input variable: whether to include extra YAML/data files in artifact
-        description: "Include extra files (Y/N) with artifacts?"
-        required: true
-        default: "Y"
-      artillery_version:                # Input variable: Artillery version to install
-        description: "Artillery version to install (ensures HTML report works)"
-        required: false
-        default: "2.1.1"
 
-# -----------------------------------------------------
+# Environment variables (not in form, set defaults here)
+env:
+  ARTILLERY_VERSION: 2.1.1             # Pinned Artillery version for HTML report stability
+  RETENTION_DAYS: 7                    # Default retention for artifacts
+  INCLUDE_EXTRA: "Y"                   # Include extra files (Y/N) in artifact
+
+# -------------------------------------------------------------
 # JOB 1: Setup
-# Collect run_id, determine which scripts to run, prepare JSON array for matrix
-# -----------------------------------------------------
+# Collect run_id, determine scripts, prepare JSON array for matrix
+# -------------------------------------------------------------
 jobs:
   setup:
-    runs-on: ubuntu-latest                 # Runs this job on a standard Ubuntu VM
-    outputs:                               # Outputs from this job that can be used in downstream jobs
-      run_id: ${{ steps.runid.outputs.run_id }}          # Output: run identifier
-      scripts_json: ${{ steps.collect.outputs.scripts_json }}  # Output: JSON array of scripts for matrix
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.runid.outputs.run_id }}            # Export run_id to downstream jobs
+      scripts_json: ${{ steps.collect.outputs.scripts_json }} # JSON array of scripts for matrix
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.branch }}  # Checkout the branch selected by user
+          ref: ${{ github.event.inputs.branch }}         # Checkout branch selected in form
 
       - name: Set Run ID
         id: runid
         run: |
-          # Check if user provided a run_id
+          # Determine run_id: use provided value or generate timestamp
           if [ -z "${{ github.event.inputs.run_id }}" ]; then
-            # Auto-generate run_id using timestamp if not provided
-            RUN_ID=$(date +'%Y%m%d-%H%M%S')
+            RUN_ID=$(date +'%Y%m%d-%H%M%S')             # Format: YYYYMMDD-HHMMSS
           else
-            RUN_ID="${{ github.event.inputs.run_id }}"  # Use provided run_id
+            RUN_ID="${{ github.event.inputs.run_id }}"   # Use user-provided run_id
           fi
-          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT    # Export run_id to be used by other jobs
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT       # Export as output
 
       - name: Collect YAML Scripts and Prepare JSON Array
         id: collect
         run: |
-          TEST_DIR="tests/${{ github.event.inputs.test_type }}"  # Folder containing selected test type
+          # Folder for selected test type
+          TEST_DIR="tests/${{ github.event.inputs.test_type }}"
           
+          # Determine which scripts to run
           if [ -z "${{ github.event.inputs.scripts }}" ]; then
-            # If no scripts specified, include all YAML files in folder
+            # All YAML files in folder
             FILES=$(ls $TEST_DIR/*.yml | xargs -n1 basename | paste -sd "," -)
           else
-            # Convert comma-separated list from input into basenames of YAML files
+            # Convert comma-separated input to YAML filenames
             FILES=$(echo "${{ github.event.inputs.scripts }}" | tr ',' '\n' | xargs -I {} basename {}.yml | paste -sd "," -)
           fi
           
-          # Convert comma-separated list to JSON array format for matrix
-          SCRIPTS_JSON=$(echo "[\"${FILES//,/\",\"}\"]")  # Example: ["load_test.yml","home_page.yml"]
-          echo "scripts_json=$SCRIPTS_JSON" >> $GITHUB_OUTPUT  # Export JSON array
+          # Convert comma-separated list to JSON array for matrix
+          SCRIPTS_JSON=$(echo "[\"${FILES//,/\",\"}\"]")   # ["script1.yml","script2.yml"]
+          echo "scripts_json=$SCRIPTS_JSON" >> $GITHUB_OUTPUT
 
-# -----------------------------------------------------
+# -------------------------------------------------------------
 # JOB 2: Sequential Execution (parallel=false)
-# -----------------------------------------------------
+# -------------------------------------------------------------
   run-sequential:
-    needs: setup   # Depends on setup job
+    needs: setup
     if: ${{ github.event.inputs.action == 'run-tests' && github.event.inputs.parallel == 'false' }}
     runs-on: ubuntu-latest
     steps:
@@ -119,30 +118,33 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18  # Node.js version for Artillery
+          node-version: 18                    # Required by Artillery
 
       - name: Install Artillery
         run: |
-          # Install pinned version of Artillery to avoid HTML report breaking
-          npm install -g artillery@${{ github.event.inputs.artillery_version }}
+          npm install -g artillery@$ARTILLERY_VERSION  # Pin version to avoid HTML report issues
 
       - name: Run Tests Sequentially
         run: |
+          # Create folder for this run
           mkdir -p reports/${{ needs.setup.outputs.run_id }}
           TEST_DIR="tests/${{ github.event.inputs.test_type }}"
-      
-          # Convert JSON array to bash array
+
+          # Parse JSON array of scripts into bash array using jq
           SCRIPTS=($(echo '${{ needs.setup.outputs.scripts_json }}' | jq -r '.[]'))
-      
-          # Loop over each script
+
+          # Loop through scripts sequentially
           for file in "${SCRIPTS[@]}"; do
-            NAME=$(basename "$file" .yml)
+            NAME=$(basename "$file" .yml)                    # Remove extension
             echo "Running $NAME sequentially"
+            # Run Artillery YAML -> JSON
             artillery run --output reports/${{ needs.setup.outputs.run_id }}/${NAME}.json "$TEST_DIR/$file"
+            # Convert JSON -> HTML report
             artillery report --output reports/${{ needs.setup.outputs.run_id }}/${NAME}.html reports/${{ needs.setup.outputs.run_id }}/${NAME}.json
           done
+
       - name: Include Extra Files
-        if: ${{ github.event.inputs.include_extra == 'Y' }}  # Only copy extra files if flag is Y
+        if: ${{ env.INCLUDE_EXTRA == 'Y' }}
         run: |
           mkdir -p reports/${{ needs.setup.outputs.run_id }}/configs
           cp -r tests/${{ github.event.inputs.test_type }}/* reports/${{ needs.setup.outputs.run_id }}/configs/ || true
@@ -152,19 +154,19 @@ jobs:
         with:
           name: artillery-${{ github.event.inputs.test_type }}-${{ needs.setup.outputs.run_id }}
           path: reports/${{ needs.setup.outputs.run_id }}
-          retention-days: ${{ github.event.inputs.retention_days }}
+          retention-days: ${{ env.RETENTION_DAYS }}
 
-# -----------------------------------------------------
+# -------------------------------------------------------------
 # JOB 3: Parallel Execution (matrix)
-# -----------------------------------------------------
+# -------------------------------------------------------------
   run-parallel:
     needs: setup
     if: ${{ github.event.inputs.action == 'run-tests' && github.event.inputs.parallel == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        script: ${{ fromJSON(needs.setup.outputs.scripts_json) }}  # Each element runs in its own VM
-        max-parallel: ${{ github.event.inputs.vm_instances }}      # Maximum parallel VMs
+        script: ${{ fromJSON(needs.setup.outputs.scripts_json) }}   # Each script runs in its own VM
+        max-parallel: ${{ github.event.inputs.vm_instances }}
 
     steps:
       - name: Checkout repository
@@ -179,19 +181,19 @@ jobs:
 
       - name: Install Artillery
         run: |
-          npm install -g artillery@${{ github.event.inputs.artillery_version }}
+          npm install -g artillery@$ARTILLERY_VERSION
 
       - name: Run Test in Parallel
         run: |
-          mkdir -p reports/${{ needs.setup.outputs.run_id }}  # Create folder for results
+          mkdir -p reports/${{ needs.setup.outputs.run_id }}
           TEST_DIR="tests/${{ github.event.inputs.test_type }}"
-          NAME=$(basename "${{ matrix.script }}" .yml)  # Extract name without extension
+          NAME=$(basename "${{ matrix.script }}" .yml)
           echo "Running $NAME in parallel VM"
           artillery run --output reports/${{ needs.setup.outputs.run_id }}/${NAME}.json "$TEST_DIR/${{ matrix.script }}"
           artillery report --output reports/${{ needs.setup.outputs.run_id }}/${NAME}.html reports/${{ needs.setup.outputs.run_id }}/${NAME}.json
 
       - name: Include Extra Files
-        if: ${{ github.event.inputs.include_extra == 'Y' }}
+        if: ${{ env.INCLUDE_EXTRA == 'Y' }}
         run: |
           mkdir -p reports/${{ needs.setup.outputs.run_id }}/configs
           cp -r tests/${{ github.event.inputs.test_type }}/* reports/${{ needs.setup.outputs.run_id }}/configs/ || true
@@ -201,4 +203,4 @@ jobs:
         with:
           name: artillery-${{ github.event.inputs.test_type }}-${{ needs.setup.outputs.run_id }}
           path: reports/${{ needs.setup.outputs.run_id }}
-          retention-days: ${{ github.event.inputs.retention_days }}
+          retention-days: ${{ env.RETENTION_DAYS }}
