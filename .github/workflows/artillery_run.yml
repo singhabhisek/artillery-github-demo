@@ -128,17 +128,19 @@ jobs:
 
       - name: Run Tests Sequentially
         run: |
-          mkdir -p reports/${{ needs.setup.outputs.run_id }}  # Create folder for reports
+          mkdir -p reports/${{ needs.setup.outputs.run_id }}
           TEST_DIR="tests/${{ github.event.inputs.test_type }}"
-
-          # Loop over all scripts
-          for file in ${{ needs.setup.outputs.scripts_json//[\[\]\"]}}; do
-            NAME=$(basename "$file" .yml)  # Extract filename without extension
+      
+          # Convert JSON array to bash array
+          SCRIPTS=($(echo '${{ needs.setup.outputs.scripts_json }}' | jq -r '.[]'))
+      
+          # Loop over each script
+          for file in "${SCRIPTS[@]}"; do
+            NAME=$(basename "$file" .yml)
             echo "Running $NAME sequentially"
             artillery run --output reports/${{ needs.setup.outputs.run_id }}/${NAME}.json "$TEST_DIR/$file"
             artillery report --output reports/${{ needs.setup.outputs.run_id }}/${NAME}.html reports/${{ needs.setup.outputs.run_id }}/${NAME}.json
           done
-
       - name: Include Extra Files
         if: ${{ github.event.inputs.include_extra == 'Y' }}  # Only copy extra files if flag is Y
         run: |
