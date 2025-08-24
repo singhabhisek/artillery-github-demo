@@ -1,0 +1,136 @@
+name: Artillery Test Orchestration   # Name of the GitHub Actions workflow (appears in Actions tab)
+
+on:
+  workflow_dispatch:                 # Enables manual triggering from GitHub UI
+    inputs:                          # These are the form fields you’ll see in the UI
+      branch:                        # Choose which branch the workflow runs against
+        description: "Use workflow from (branch)"
+        required: true
+        default: "main"              # Change default branch if needed (e.g., "develop")
+      action:                        # What to do: run tests or clean old artifacts
+        description: "Choose action"
+        required: true
+        type: choice
+        options:
+          - run-tests
+          - clear-artifacts
+      run_id:                        # Identifier for test run (useful for organizing results)
+        description: "Optional Run ID (leave blank for auto yyyymmdd-HHMMSS)"
+        required: false
+        default: ""                  # Blank means we’ll generate a timestamp
+      environment:                   # Which environment to point tests to (e.g., dev/test/staging)
+        description: "Environment for tests"
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+      test_type:                     # Which set of tests to run (mapped to folders under /tests)
+        description: "Type of test to run"
+        required: true
+        type: choice
+        options:
+          - load
+          - stress
+      scripts:                       # Which scripts to run (comma-separated), default runs all in folder
+        description: "Comma-separated artillery scripts to run (default: all)"
+        required: false
+        default: ""                  # Leave blank = run everything in selected folder
+      vm_instances:                  # Number of parallel VMs (not yet implemented in this version)
+        description: "Number of VM instances to run in parallel"
+        required: true
+        default: "1"
+      retention_days:                # How long to keep artifacts (reports) before auto-deletion
+        description: "Retention period (days) for old runs/artifacts"
+        required: true
+        default: "7"
+      include_extra:                 # Whether to include extra files (yml/data/etc.) in artifacts
+        description: "Include extra folders in artifact? (Y/N)"
+        required: true
+        default: "Y"
+
+jobs:
+  run-or-clean:
+    runs-on: ubuntu-latest           # Job runs on GitHub’s Ubuntu runner VM
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }} # Checkout the branch selected in the form
+
+      - name: Set Run ID
+        id: runid
+        run: |
+          # If user didn’t provide a Run ID, generate one based on timestamp
+          if [ -z "${{ github.event.inputs.run_id }}" ]; then
+            RUN_ID=$(date +'%Y%m%d-%H%M%S')     # Format: YYYYMMDD-HHMMSS
+          else
+            RUN_ID="${{ github.event.inputs.run_id }}"
+          fi
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT # Store output for later steps
+
+      - name: Handle Action
+        if: ${{ github.event.inputs.action == 'clear-artifacts' }}
+        run: |
+          # Clear old artifacts from GitHub repository
+          # Requires GitHub CLI (gh) with GITHUB_TOKEN permission
+          echo "Clearing artifacts older than ${{ github.event.inputs.retention_days }} days..."
+          gh extension install actions/gh-actions-cache || true
+          gh actions-cache delete --confirm --repo $GITHUB_REPOSITORY \
+            --branch ${{ github.event.inputs.branch }} \
+            --created-before $(( $(date +%s) - ${{ github.event.inputs.retention_days }}*24*3600 ))
+          # NOTE: GitHub doesn’t natively support artifact expiry beyond retention-days
+          # This deletes caches; for artifacts you may need API calls
+
+      - name: Set up Node.js
+        if: ${{ github.event.inputs.action == 'run-tests' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18            # Artillery requires Node.js (18 is stable, can bump later)
+
+      - name: Install Artillery
+        if: ${{ github.event.inputs.action == 'run-tests' }}
+        run: |
+          npm install -g artillery     # Install Artillery globally
+          # Plugins like `expect` are bundled with Artillery by default
+          # For custom plugins, you can add lines like:
+          # npm install -g artillery-plugin-<name>
+
+      - name: Run Selected Tests
+        if: ${{ github.event.inputs.action == 'run-tests' }}
+        run: |
+          mkdir -p reports/${{ steps.runid.outputs.run_id }}   # Create folder for reports
+          TEST_DIR="tests/${{ github.event.inputs.test_type }}" # e.g., tests/load or tests/stress
+
+          if [ -z "${{ github.event.inputs.scripts }}" ]; then
+            # Run ALL YAML scripts inside the test folder
+            FILES=$(ls $TEST_DIR/*.yml)
+          else
+            # Run ONLY scripts passed by user (comma-separated)
+            FILES=$(echo "${{ github.event.inputs.scripts }}" | tr ',' '\n' | xargs -I {} echo "$TEST_DIR/{}.yml")
+          fi
+
+          echo "Running tests: $FILES"
+          for file in $FILES; do
+            NAME=$(basename "$file" .yml) # Extract filename without extension
+            # Run test → save JSON results
+            artillery run --output reports/${{ steps.runid.outputs.run_id }}/${NAME}.json "$file"
+            # Generate pretty HTML report from JSON
+            artillery report --output reports/${{ steps.runid.outputs.run_id }}/${NAME}.html reports/${{ steps.runid.outputs.run_id }}/${NAME}.json
+          done
+
+      - name: Collect Configs & Data
+        if: ${{ github.event.inputs.action == 'run-tests' && github.event.inputs.include_extra == 'Y' }}
+        run: |
+          # Copy original configs/data files into reports so artifacts have full traceability
+          mkdir -p reports/${{ steps.runid.outputs.run_id }}/configs
+          cp -r tests/${{ github.event.inputs.test_type }}/* reports/${{ steps.runid.outputs.run_id }}/configs/ || true
+
+      - name: Upload Artifacts
+        if: ${{ github.event.inputs.action == 'run-tests' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: artillery-${{ github.event.inputs.test_type }}-${{ steps.runid.outputs.run_id }}
+          path: reports/${{ steps.runid.outputs.run_id }}  # Uploads reports + configs
+          retention-days: ${{ github.event.inputs.retention_days }} # Delete after retention period
