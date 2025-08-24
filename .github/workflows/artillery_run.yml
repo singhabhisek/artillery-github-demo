@@ -119,7 +119,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18                    # Required by Artillery
+          node-version: "lts/*"   # Install the latest LTS Node.js version (currently Node 20)                    # Required by Artillery
 
       - name: Install Artillery
         run: |
