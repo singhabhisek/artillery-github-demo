@@ -174,7 +174,7 @@ jobs:
     strategy:
       matrix:
         # Converts list of scripts into matrix array for parallel jobs
-        script: ${{ fromJSON('["' + join(needs.setup.outputs.scripts, '","') + '"]') }}
+        script: ${{ fromJSON('["' + replace(needs.setup.outputs.scripts, '\n', '","') + '"]') }}
         max-parallel: ${{ github.event.inputs.vm_instances }}  # Limit concurrent VMs
 
     steps:
